@@ -1,0 +1,66 @@
+# QaseeGuard のビルド・zip 作成・リリース公開
+#
+# - v で始まるタグ（例: v1.0.1）を push すると、ビルドして GitHub Releases に zip を公開する
+# - Actions 画面から手動実行（workflow_dispatch）すると、ビルドと zip 作成だけ行い、
+#   zip は実行結果の Artifacts からダウンロードできる（リリースは作らない）
+#
+# アプリは Intel / Apple シリコン両対応（ユニバーサル）なので、zip は 1 つで両方の Mac で動く。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # リリースの作成に必要
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: バージョンを決める
+        id: ver
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ツールのバージョンを表示
+        run: |
+          sw_vers
+          swiftc --version
+
+      - name: ビルド（Intel / Apple シリコン両対応）
+        env:
+          APP: ${{ github.workspace }}/build/QaseeGuard.app
+          VERSION: ${{ steps.ver.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: bash build.sh
+
+      - name: zip を作る
+        id: pkg
+        run: echo "zip=$(bash package.sh build/QaseeGuard.app)" >> "$GITHUB_OUTPUT"
+
+      - name: zip を Artifacts に保存
+        uses: actions/upload-artifact@v4
+        with:
+          name: QaseeGuard-${{ steps.ver.outputs.version }}
+          path: ${{ steps.pkg.outputs.zip }}
+          if-no-files-found: error
+
+      - name: リリースを公開
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --title "QaseeGuard $VERSION" \
+            --generate-notes
