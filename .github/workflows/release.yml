@@ -1,20 +1,26 @@
-# QaseeGuard のビルド・zip 作成・リリース公開
+# QaseeGuard のビルド・zip 作成・リリース公開（すべて自動）
 #
-# - v で始まるタグ（例: v1.0.1）を push すると、ビルドして GitHub Releases に zip を公開する
-# - Actions 画面から手動実行（workflow_dispatch）すると、ビルドと zip 作成だけ行い、
-#   zip は実行結果の Artifacts からダウンロードできる（リリースは作らない）
+# - main に push するたびにビルドして zip を作る（Artifacts からダウンロードできる）
+# - Info.plist の CFBundleShortVersionString（例: 1.0.1）がまだリリースされていなければ、
+#   タグ v1.0.1 を作って GitHub Releases に zip を公開する
+#   → リリースしたいときは Info.plist のバージョンを上げて main に push するだけ
+# - プルリクエストではビルドの確認だけ行う（リリースはしない）
 #
 # アプリは Intel / Apple シリコン両対応（ユニバーサル）なので、zip は 1 つで両方の Mac で動く。
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+    branches:
+      - main
+  pull_request:
 
 permissions:
-  contents: write # リリースの作成に必要
+  contents: write # タグとリリースの作成に必要
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -22,13 +28,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: バージョンを決める
+      - name: バージョンを読む
         id: ver
         run: |
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "バージョン: $version"
+
+      - name: リリース済みか確認
+        id: released
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION はリリース済みなので、今回はビルドだけ行います"
           else
-            echo "version=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION を新しくリリースします"
           fi
 
       - name: ツールのバージョンを表示
@@ -39,7 +58,6 @@ jobs:
       - name: ビルド（Intel / Apple シリコン両対応）
         env:
           APP: ${{ github.workspace }}/build/QaseeGuard.app
-          VERSION: ${{ steps.ver.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: bash build.sh
 
@@ -50,17 +68,18 @@ jobs:
       - name: zip を Artifacts に保存
         uses: actions/upload-artifact@v4
         with:
-          name: QaseeGuard-${{ steps.ver.outputs.version }}
+          name: QaseeGuard-${{ steps.ver.outputs.version }}-build${{ github.run_number }}
           path: ${{ steps.pkg.outputs.zip }}
           if-no-files-found: error
 
       - name: リリースを公開
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && steps.released.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           ZIP: ${{ steps.pkg.outputs.zip }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+          gh release create "v$VERSION" "$ZIP" \
+            --target "$GITHUB_SHA" \
             --title "QaseeGuard $VERSION" \
             --generate-notes
