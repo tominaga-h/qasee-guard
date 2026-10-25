@@ -1,5 +1,5 @@
 #!/bin/bash
-# QaseeGuard をビルドする（Intel / Apple シリコン両対応）
+# QaseeGuard をビルドする
 #
 # 使い方:
 #   bash build.sh                       … /Applications/QaseeGuard.app に入れる（自分のMac用）
@@ -7,6 +7,7 @@
 #
 # 環境変数:
 #   APP           出力先（既定: /Applications/QaseeGuard.app）
+#   ARCHS         ビルドする CPU（既定: "x86_64 arm64" = 両対応。"arm64" だけ、なども可）
 #   VERSION       アプリのバージョン（例: 1.0.1）。指定すると Info.plist の値を上書き
 #   BUILD_NUMBER  ビルド番号。指定すると Info.plist の値を上書き
 set -euo pipefail
@@ -27,11 +28,14 @@ if [ -f icon-src.png ]; then
   iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 fi
 
-# Intel と Apple シリコンの両方向けにビルドして 1 つにまとめる
-for arch in x86_64 arm64; do
+# 指定された CPU 向けにビルドして 1 つにまとめる（x86_64 = Intel、arm64 = Apple シリコン）
+ARCHS="${ARCHS:-x86_64 arm64}"
+bins=()
+for arch in $ARCHS; do
   swiftc -O -swift-version 5 -target "$arch-apple-macos13.0" main.swift Symbol.swift -o "build/QaseeGuard-$arch"
+  bins+=("build/QaseeGuard-$arch")
 done
-lipo -create build/QaseeGuard-x86_64 build/QaseeGuard-arm64 -output build/QaseeGuard
+lipo -create "${bins[@]}" -output build/QaseeGuard
 
 # /Applications に入れ直すときだけ、動いている QaseeGuard を止める
 if [ "$APP" = "/Applications/QaseeGuard.app" ]; then

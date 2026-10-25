@@ -1,12 +1,13 @@
 # QaseeGuard のビルド・zip 作成・リリース公開（すべて自動）
 #
-# - main に push するたびにビルドして zip を作る（Artifacts からダウンロードできる）
+# - main に push するたびに、Apple シリコン用と Intel 用をそれぞれの Mac でビルドして zip を作る
+#     QaseeGuard-<バージョン>-mac-apple-silicon.zip … M1 / M2 / M3 / M4 などの Mac 用
+#     QaseeGuard-<バージョン>-mac-intel.zip         … Intel の Mac 用
+#   （zip と .sha256 は実行結果の Artifacts からダウンロードできる）
 # - Info.plist の CFBundleShortVersionString（例: 1.0.1）がまだリリースされていなければ、
-#   タグ v1.0.1 を作って GitHub Releases に zip を公開する
+#   タグ v1.0.1 を作って GitHub Releases に 2 つの zip を公開する
 #   → リリースしたいときは Info.plist のバージョンを上げて main に push するだけ
 # - プルリクエストではビルドの確認だけ行う（リリースはしない）
-#
-# アプリは Intel / Apple シリコン両対応（ユニバーサル）なので、zip は 1 つで両方の Mac で動く。
 name: Release
 
 on:
@@ -23,63 +24,120 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: macos-15
+  prepare:
+    name: バージョンとリリース要否を確認
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      release: ${{ steps.released.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: バージョンを読む
         id: ver
         run: |
-          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+          version=$(python3 -c 'import plistlib; print(plistlib.load(open("Info.plist","rb"))["CFBundleShortVersionString"])')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "バージョン: $version"
 
       - name: リリース済みか確認
         id: released
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "プルリクエストなので、ビルドの確認だけ行います"
+          elif gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
             echo "v$VERSION はリリース済みなので、今回はビルドだけ行います"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
             echo "v$VERSION を新しくリリースします"
           fi
 
-      - name: ツールのバージョンを表示
+  build:
+    name: ビルド（${{ matrix.label }}）
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: mac-apple-silicon
+            arch: arm64
+            runner: macos-15
+          - label: mac-intel
+            arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 環境を表示
         run: |
           sw_vers
+          uname -m
           swiftc --version
 
-      - name: ビルド（Intel / Apple シリコン両対応）
+      - name: ビルド
         env:
           APP: ${{ github.workspace }}/build/QaseeGuard.app
+          ARCHS: ${{ matrix.arch }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: bash build.sh
 
       - name: zip を作る
-        id: pkg
-        run: echo "zip=$(bash package.sh build/QaseeGuard.app)" >> "$GITHUB_OUTPUT"
+        env:
+          ARCHS: ${{ matrix.arch }}
+        run: |
+          zip=$(bash package.sh build/QaseeGuard.app "${{ matrix.label }}")
+          name=$(basename "$zip")
+          (cd dist && shasum -a 256 "$name" > "$name.sha256")
+          mkdir -p out && mv "$zip" "$zip.sha256" out/
+          ls -lh out/
 
-      - name: zip を Artifacts に保存
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: QaseeGuard-${{ steps.ver.outputs.version }}-build${{ github.run_number }}
-          path: ${{ steps.pkg.outputs.zip }}
+          name: QaseeGuard-${{ needs.prepare.outputs.version }}-${{ matrix.label }}
+          path: out/*
           if-no-files-found: error
 
-      - name: リリースを公開
-        if: github.event_name == 'push' && steps.released.outputs.exists == 'false'
+  release:
+    name: リリースを公開
+    needs: [prepare, build]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: 公開するファイル
+        run: ls -lh out/
+
+      - name: リリースを作成
         env:
           GH_TOKEN: ${{ github.token }}
-          ZIP: ${{ steps.pkg.outputs.zip }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          gh release create "v$VERSION" "$ZIP" \
+          cat > notes.md <<'EOF'
+          ## どちらをダウンロードすればいい？
+
+          | お使いの Mac | ダウンロードするファイル |
+          |---|---|
+          | Apple シリコン（M1 / M2 / M3 / M4 など） | `QaseeGuard-…-mac-apple-silicon.zip` |
+          | Intel | `QaseeGuard-…-mac-intel.zip` |
+
+          わからないときは、画面左上の アップルメニュー →「このMacについて」を開いてください。
+          「チップ」に Apple M〜 と書かれていれば Apple シリコン、「プロセッサ」に Intel と書かれていれば Intel です。
+
+          インストール方法は zip の中の「はじめにお読みください.txt」を見てください。
+          EOF
+          gh release create "v$VERSION" out/* \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "QaseeGuard $VERSION" \
+            --notes-file notes.md \
             --generate-notes
