@@ -32,7 +32,7 @@ fi
 ARCHS="${ARCHS:-x86_64 arm64}"
 bins=()
 for arch in $ARCHS; do
-  swiftc -O -swift-version 5 -target "$arch-apple-macos13.0" main.swift Symbol.swift -o "build/QaseeGuard-$arch"
+  swiftc -O -swift-version 5 -target "$arch-apple-macos13.0" main.swift Symbol.swift Updater.swift -o "build/QaseeGuard-$arch"
   bins+=("build/QaseeGuard-$arch")
 done
 lipo -create "${bins[@]}" -output build/QaseeGuard

@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var statusItem: NSStatusItem!
     var timer: Timer?
     let defaults = UserDefaults.standard
+    @MainActor lazy var updater = Updater()
 
     // MARK: - 起動
 
@@ -44,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             notifyNotStarted(test: true)
         } else if shouldWarn {
             notifyNotStarted()
+        }
+
+        // テスト用: --check-update で起動したらすぐ更新を確認する
+        if CommandLine.arguments.contains("--check-update") {
+            updater.checkForUpdates()
         }
     }
 
@@ -202,6 +208,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         menu.addItem(login)
 
         menu.addItem(.separator())
+
+        // いまのバージョン（押しても何も起きない）
+        let version = NSMenuItem(title: "バージョン \(updater.currentVersion)", action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
+
+        let update = NSMenuItem(title: updater.isChecking ? "更新を確認中…" : "更新を確認…",
+                                action: #selector(checkForUpdates), keyEquivalent: "")
+        update.target = self
+        update.isEnabled = !updater.isChecking
+        menu.addItem(update)
+
         let quit = NSMenuItem(title: "QaseeGuard を終了", action: #selector(quitSelf), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -265,6 +283,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             showError("ログイン項目を変更できませんでした", error)
         }
     }
+
+    @MainActor @objc func checkForUpdates() { updater.checkForUpdates() }
 
     @objc func quitSelf() { NSApp.terminate(nil) }
 
