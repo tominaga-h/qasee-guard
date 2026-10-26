@@ -1,23 +1,25 @@
 # QaseeGuard のビルド・zip 作成・リリース公開（すべて自動）
 #
-# - main に push するたびに、Apple シリコン用と Intel 用をそれぞれの Mac でビルドして zip を作る
+# - Apple シリコン用と Intel 用をそれぞれの Mac でビルドして zip を作る
 #     QaseeGuard-<バージョン>-mac-apple-silicon.zip … M1 / M2 / M3 / M4 などの Mac 用
 #     QaseeGuard-<バージョン>-mac-intel.zip         … Intel の Mac 用
 #   （zip と .sha256 は実行結果の Artifacts からダウンロードできる）
-# - Info.plist の CFBundleShortVersionString（例: 1.0.1）がまだリリースされていなければ、
-#   タグ v1.0.1 を作って GitHub Releases に 2 つの zip を公開する
-#   → リリースしたいときは Info.plist のバージョンを上げて main に push するだけ
-# - プルリクエストではビルドの確認だけ行う（リリースはしない）
+# - タグ v1.0.3 のように v で始まるタグを push すると、そのタグで GitHub Releases に 2 つの zip を公開する
+#   → リリースしたいときは Info.plist のバージョンをタグと同じ値（例: 1.0.3）にしてコミットし、
+#     そのコミットにタグを打って push する。Info.plist とタグが違っていたらエラーで止める
+# - main への push とプルリクエストではビルドの確認だけ行う（リリースはしない）
 name: Release
 
 on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   pull_request:
 
 permissions:
-  contents: write # タグとリリースの作成に必要
+  contents: write # リリースの作成に必要
 
 concurrency:
   group: release-${{ github.ref }}
@@ -37,8 +39,16 @@ jobs:
         id: ver
         run: |
           version=$(python3 -c 'import plistlib; print(plistlib.load(open("Info.plist","rb"))["CFBundleShortVersionString"])')
+          echo "Info.plist のバージョン: $version"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            echo "タグのバージョン: $tag_version"
+            if [ "$tag_version" != "$version" ]; then
+              echo "::error::タグ $GITHUB_REF_NAME と Info.plist のバージョン（$version）が違います。Info.plist を $tag_version にしたコミットにタグを打ち直してください"
+              exit 1
+            fi
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "バージョン: $version"
 
       - name: リリース済みか確認
         id: released
@@ -46,9 +56,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "プルリクエストなので、ビルドの確認だけ行います"
+            echo "タグの push ではないので、ビルドの確認だけ行います"
           elif gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "v$VERSION はリリース済みなので、今回はビルドだけ行います"
@@ -137,7 +147,7 @@ jobs:
           EOF
           gh release create "v$VERSION" out/* \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --verify-tag \
             --title "QaseeGuard $VERSION" \
             --notes-file notes.md \
             --generate-notes
