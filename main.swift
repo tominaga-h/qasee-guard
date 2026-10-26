@@ -185,7 +185,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
         menu.addItem(.separator())
 
-        let dayOff = NSMenuItem(title: "今日は休み（警告を出さない）", action: #selector(toggleDayOff), keyEquivalent: "")
+        // 「設定」の見出し（薄い文字）
+        menu.addItem(sectionHeader("設定"))
+
+        // 休みの切り替え（状態と動作が取り違えられないように、状態で文言を変える）
+        let dayOffTitle = isDayOff ? "今日は警告を出さない（休みに設定中）"
+                                   : "今日は警告を出さない（休みにする）"
+        let dayOff = NSMenuItem(title: dayOffTitle, action: #selector(toggleDayOff), keyEquivalent: "")
         dayOff.target = self
         dayOff.state = isDayOff ? .on : .off
         menu.addItem(dayOff)
@@ -199,6 +205,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let quit = NSMenuItem(title: "QaseeGuard を終了", action: #selector(quitSelf), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
+    }
+
+    /// メニューの見出し（macOS 14 以降は標準の見出し、それより前は薄い文字の項目）
+    func sectionHeader(_ title: String) -> NSMenuItem {
+        if #available(macOS 14.0, *) {
+            return NSMenuItem.sectionHeader(title: title)
+        }
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)])
+        return item
     }
 
     // MARK: - 操作
